@@ -44,7 +44,8 @@ def prepare_kitti_dataset(left_img, right_img, disp_gt=None, flow_gt=None, vis_p
         # convert disparity to depth
         depth = baseline * focal_length / (disp_gt + 1e-4)
         depth = depth.view(-1, 1)
-        depth_mask = disp_gt > 0
+#        depth_mask = disp_gt > 0
+        depth_mask = depth < 50.
         depth_mask = depth_mask.reshape(-1)
 #        depth = torch.clamp(depth, 0, 80.0)     # set distance threshold within 80m
     meshgrid = generate_meshgrid(disp).view(-1, 2)  # [H*W, 2]
@@ -58,7 +59,7 @@ def prepare_kitti_dataset(left_img, right_img, disp_gt=None, flow_gt=None, vis_p
     draw_scenes(pts, point_colors=False, draw_origin=True)
 
 def TensorToPILImage(img_tensor, saving_path=None, img_show=False):
-    image = transforms.ToPILIMage().convert('RGB')
+    image = transforms.ToPILImage(img_tensor).convert('RGB')
     if saving_path is not None:
         image.save(saving_path)
     if img_show:
