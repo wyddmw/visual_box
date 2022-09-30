@@ -8,6 +8,8 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 import argparse
 
+from utils import readFlow, save_vis_flow_tofile, flow_warp
+
 
 def draw_scenes(points, draw_origin=False, point_colors=False):
     if isinstance(points, torch.Tensor):
@@ -59,7 +61,8 @@ def prepare_kitti_dataset(left_img, right_img, disp_gt=None, flow_gt=None, vis_p
     draw_scenes(pts, point_colors=False, draw_origin=True)
 
 def TensorToPILImage(img_tensor, saving_path=None, img_show=False):
-    image = transforms.ToPILImage(img_tensor).convert('RGB')
+    image = transforms.ToPILImage()(img_tensor).convert('RGB')
+    # image = image.convert('RGB')
     if saving_path is not None:
         image.save(saving_path)
     if img_show:
@@ -87,8 +90,8 @@ def generate_meshgrid(img):
     
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--left_img', type=str, default='./left.png')
-    parser.add_argument('--right_img', type=str, default='./right.png')
+    parser.add_argument('--left_img', type=str, default=None)
+    parser.add_argument('--right_img', type=str, default=None)
     parser.add_argument('--disp', type=str, default=None)
     parser.add_argument('--flow', type=str, default=None)
     args = parser.parse_args()
@@ -96,20 +99,41 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    left_img = Image.open(args.left_img).convert('RGB')
-    right_img = Image.open(args.right_img).convert('RGB')
+    if args.left_img is not None:
+        left_img = Image.open(args.left_img).convert('RGB')
+        right_img = Image.open(args.right_img).convert('RGB')
     
-    train_transform_list = [#transforms.RandomCrop(args.img_height, args.img_width),
-                            transforms.ToTensor(),
-#                            #transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-                            ]
-#
-    transform = transforms.Compose(train_transform_list)
-    
-    left_tensor = transform(left_img)
-    right_tensor = transform(right_img)
+        train_transform_list = [#transforms.RandomCrop(args.img_height, args.img_width),
+                                transforms.ToTensor(),
+    #                            #transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+                                ]
+    #
+        transform = transforms.Compose(train_transform_list)
+        
+        left_tensor = transform(left_img)
+        right_tensor = transform(right_img)
+
+    if args.flow is not None:
+        flow = readFlow(args.flow).astype(np.float32)
+        flow_vis_name = 'flow.png'
+        
+        save_vis_flow_tofile(flow, flow_vis_name, vis=False)
+
+        # image warping 
+        flow = torch.Tensor(flow)
+        if len(left_tensor.shape) == 3:
+            left_tensor = left_tensor.unsqueeze(dim=0)
+            right_tensor = right_tensor.unsqueeze(dim=0)
+        flow = flow.unsqueeze(dim=0).permute(0, 3, 1, 2)
+        warped_img = flow_warp(right_tensor, flow)
+        error_map = torch.abs((warped_img - left_tensor)).squeeze(dim=0)
+        warped_img = warped_img.squeeze(dim=0)
+        
+        TensorToPILImage(error_map, img_show=True)
+        TensorToPILImage(warped_img, img_show=True)
+
     if args.disp is not None:
         disp = np.array(Image.open(args.disp))
         disp = disp.astype(np.float32) / 256.
         disp_tensor = transform(disp)
-    prepare_kitti_dataset(left_tensor, right_tensor, disp_gt=disp_tensor, vis_points=True)
+        prepare_kitti_dataset(right_tensor, right_tensor, disp_gt=disp_tensor, vis_points=True)
