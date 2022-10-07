@@ -89,6 +89,54 @@ def kitti_project_depth(src_depth):
     # import imageio
     # imageio.imwrite('projected_depth.png', projected_depth)
 
+def get_patches(rays_all, patch_size, num_patches, disp):
+    '''
+    Get patches from images.
+    Args:
+        Rays_all: [H, W, 3, 3] -> [H, W, r_o+r_d+rgb, 3]
+        Patch_size: int
+        Num_patches: num_rays / patch_size ** 2
+        Disp: [H, W]
+    Return:
+        selected_rays: [num_patches, patch_size**2, 3, 3]
+        selected_disp: [num_patches, patch_size**2, 1]
+    '''
+    # prevent sampling from invalid points out of depth threshold
+    H, W, _, _ = rays_all.shape
+    if len(disp.shape) > 2:
+        disp = disp.reshape(H, W)
+    disp_mask = (disp > 0) & (disp < 192)       # [H, W]
+    disp_mask = disp_mask.reshape(-1)
+    
+    meshgrid = np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), axis=-1).reshape(-1, 2)
+
+    valid_grid = meshgrid[disp_mask]
+    
+    grid_neighbors = valid_grid[:, None, :] + np.stack(
+      np.meshgrid(np.arange(patch_size), np.arange(patch_size), indexing='xy'),
+      axis=-1).reshape(1, -1, 2)
+    # applying boundary threshold
+    boundary_mask = (grid_neighbors[..., 0].max(axis=-1) < H) & (grid_neighbors[..., 1].max(axis=-1) < W)
+    # clip boundaries
+    grid_neighbors[..., 0] = np.clip(grid_neighbors[..., 0], 0, H-1)
+    grid_neighbors[..., 1] = np.clip(grid_neighbors[..., 1], 0, W-1)
+    disp_mask = disp_mask.reshape(H, W)
+    center_masks = disp_mask[grid_neighbors[..., 0], grid_neighbors[..., 1]].sum(axis=-1) == (patch_size ** 2)    # [num_valid_centers, patch_size*patch_size]
+    center_masks = center_masks * boundary_mask
+    # depth value for selected patches should be valid
+    valid_grid = valid_grid[center_masks]           # [num_valid_centers, 2]
+    
+    selected_index = np.random.randint(0, valid_grid.shape[0], size=(num_patches))
+    selected_grid = valid_grid[selected_index, None, :]
+    
+    patch_idx = selected_grid + np.stack(
+      np.meshgrid(np.arange(patch_size), np.arange(patch_size), indexing='xy'),
+      axis=-1).reshape(1, -1, 2)
+    selected_images = rays_all[patch_idx[..., 0], patch_idx[..., 1]]
+    selected_disp = disp[patch_idx[..., 0], patch_idx[..., 1]]
+    return selected_images, selected_disp
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--left_img', type=str, default=None)
@@ -138,5 +186,15 @@ if __name__ == '__main__':
         disp = np.array(Image.open(args.disp))
         disp = disp.astype(np.float32) / 256.
         disp_tensor = transform(disp)
-        kitti_project_depth(disp_tensor[:, None])
         
+        # generate projected depth
+        # kitti_project_depth(disp_tensor[:, None])
+        # generate patches
+        # left_tensor = left_tensor.permute(1, 2, 0).unsqueeze(dim=-2)
+        # selected_patches, selected_disp = get_patches(left_tensor, 16, 4, disp=disp_tensor)
+        
+        # batches = selected_patches.shape[0]
+        # selected_patches = selected_patches.reshape(4, 16, 16, -1, 3).permute(0, 3, 4, 1, 2)
+        
+        # for i in range(batches):
+        #     TensorToPILImage(selected_patches[i][0], img_show=True)
