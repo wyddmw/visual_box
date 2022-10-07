@@ -1,3 +1,4 @@
+from email import iterators
 import open3d
 import torch
 import numpy as np
@@ -8,7 +9,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 import argparse
 
-from utils import readFlow, save_vis_flow_tofile, flow_warp
+from utils import *
 
 
 def draw_scenes(points, draw_origin=False, point_colors=False):
@@ -53,46 +54,47 @@ def prepare_kitti_dataset(left_img, right_img, disp_gt=None, flow_gt=None, vis_p
     meshgrid = generate_meshgrid(disp).view(-1, 2)  # [H*W, 2]
     pts = torch.ones((H*W, 6))
     pts[:, 0] = (meshgrid[:, 0] - W / 2) / focal_length 
-    pts[:, 1] = (meshgrid[:, 1] - H / 2) / focal_length 
+    pts[:, 1] = (meshgrid[:, 1] - H / 2) / focal_length
     pts[:, :3] = pts[:, :3] * depth 
     pts[:, 3:] = left_img.view(-1, 3)
     if depth_mask is not None:
         pts[~depth_mask] = 0
     draw_scenes(pts, point_colors=False, draw_origin=True)
 
-def TensorToPILImage(img_tensor, saving_path=None, img_show=False):
-    image = transforms.ToPILImage()(img_tensor).convert('RGB')
-    # image = image.convert('RGB')
-    if saving_path is not None:
-        image.save(saving_path)
-    if img_show:
-        image.show()
-    return image
-
-def TensorToNumpy(img_tensor):
-    image = img_tensor.data.cpu().numpy() * 255.
-    image = image.astype('np.uint8')
-    assert len(image.shape) == 3
-    image = np.transpose(image, (1, 2, 0))  # H, W C
-    if saving_path is not None:
-        cv2.imwrite(image, saving_path)
-    if img_show:
-        cv2.imshow('image', image)
-        cv2.waitKey(0)
-    return image
-
-def generate_meshgrid(img):
-    H, W = img.shape[-2:]
-    x_range = torch.arange(0, W).view(1, 1, W).expand(1, H, W)
-    y_range = torch.arange(0, H).view(1, H, 1).expand(1, H, W)
-    grid = torch.cat((x_range, y_range), dim=0).permute(1, 2, 0)    # [H, W, 2]
-    return grid
+def kitti_project_depth(src_depth):
+    N, C, H, W = src_depth.shape
+    src_depth = src_depth.reshape(-1, 1)
+    meshgrid = generate_meshgrid(disp).view(-1, 2)  # [H*W, 2]
     
+    src_depth = (0.54 * 721.277) / (src_depth + 1e-5)
+    pts = meshgrid / 721.277 * src_depth
+    pts = torch.cat((pts, src_depth), dim=-1)
+
+    # convert to target view
+    pts[:, 0] = pts[:, 0] - 0.54
+    right_coords = pts[:, :-1] / pts[:, -1:] * 721.277
+    right_coords = right_coords.long()
+    valid_mask = (pts[:, -1] < 80.0) & (right_coords[:, 0] < W) & (right_coords[:, 1] < H)
+    
+    right_coords = right_coords.reshape(-1, 2)
+    
+    projected_depth = torch.zeros_like(src_depth).view(N, H, W)        # [N, C, H, W]
+    
+    projected_depth[:, right_coords[valid_mask, 1], right_coords[valid_mask, 0]] = 0.54 * 721.277 / pts[valid_mask, -1].unsqueeze(dim=0)
+    
+    projected_depth = projected_depth.view(H, W, 1).cpu().numpy().astype(np.uint8)
+    import cv2
+    erode_kernel = np.ones((3, 3), np.uint8)
+    projected_depth = cv2.dilate(projected_depth, erode_kernel, iterations=1)
+    # import imageio
+    # imageio.imwrite('projected_depth.png', projected_depth)
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--left_img', type=str, default=None)
     parser.add_argument('--right_img', type=str, default=None)
     parser.add_argument('--disp', type=str, default=None)
+    parser.add_argument('--disp_right', type=str, default=None)
     parser.add_argument('--flow', type=str, default=None)
     args = parser.parse_args()
     return args
@@ -136,4 +138,5 @@ if __name__ == '__main__':
         disp = np.array(Image.open(args.disp))
         disp = disp.astype(np.float32) / 256.
         disp_tensor = transform(disp)
-        prepare_kitti_dataset(right_tensor, right_tensor, disp_gt=disp_tensor, vis_points=True)
+        kitti_project_depth(disp_tensor[:, None])
+        
