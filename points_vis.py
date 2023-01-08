@@ -90,23 +90,32 @@ def kitti_project_depth(src_depth):
     import imageio
     imageio.imwrite('projected_depth.png', projected_depth)
 
-def kitti_sample_world_coords(left_image, left_disp):
+def kitti_sample_world_coords(left_image, left_disp, scale=1):
+    # scale test
+    mask = (left_disp > 0) & (left_disp < 192)
+    left_disp = left_disp * mask - 10
+    # left_image = F.avg_pool2d(left_image, (2, 2), stride=2)
+    # left_disp = F.avg_pool2d(left_disp, (2, 2), stride=2) / scale
+
+    focal_length = 721.277 / scale
     N, C, H, W = left_image.shape
-    left_depth = (0.54 * 721.277) / left_disp
+    left_depth = (0.54 * focal_length) / (left_disp + 1e-6)
     left_depth = left_depth.view(-1, 1)
     # convert camera coords to world coords
-    camera_coords = generate_meshgrid(disp).view(-1, 2)
+    camera_coords = generate_meshgrid(left_disp).view(-1, 2)
     
     # compute right world coods
-    world_coords_xy = camera_coords / 721.277 * left_depth
+    world_coords_xy = camera_coords / focal_length * left_depth
     world_coords_xy[:, 0] = (world_coords_xy[:, 0])
     world_coords = torch.cat((world_coords_xy, left_depth), dim=-1)
-    right_sample_coords = world_coords[:, :-1] / world_coords[:, -1:] * 721.277
-
+    right_sample_coords = world_coords[:, :-1] / world_coords[:, -1:] * focal_length
+    
     right_sample_coords = right_sample_coords.view(1, H, W, -1).permute(0, 3, 1, 2)
     right_image_sampled = normalize_coords(right_sample_coords)
     warped_img = F.grid_sample(left_image, right_image_sampled, mode='bilinear', padding_mode='border')
-    TensorToPILImage(warped_img[0], saving_path='warped_right.png', img_show=True)
+    warped_img = warped_img * mask
+    TensorToPILImage(warped_img[0], saving_path='warped_right.png')
+    TensorToPILImage(left_image[0], saving_path='scale_left.png')
 
 def get_patches(rays_all, patch_size, num_patches, disp):
     '''
