@@ -50,10 +50,10 @@ def prepare_kitti_dataset(left_img, right_img, disp_gt=None, flow_gt=None, vis_p
 #        depth_mask = disp_gt > 0
         depth_mask = depth < 50.
         depth_mask = depth_mask.reshape(-1)
-#        depth = torch.clamp(depth, 0, 80.0)     # set distance threshold within 80m
+#        depth = torch.clamp(depth, 0, 80.0)        # set distance threshold within 80m
     meshgrid = generate_meshgrid(disp).view(-1, 2)  # [H*W, 2]
     pts = torch.ones((H*W, 6))
-    pts[:, 0] = (meshgrid[:, 0] - W / 2) / focal_length 
+    pts[:, 0] = (meshgrid[:, 0] - W / 2) / focal_length
     pts[:, 1] = (meshgrid[:, 1] - H / 2) / focal_length
     pts[:, :3] = pts[:, :3] * depth 
     pts[:, 3:] = left_img.view(-1, 3)
@@ -71,6 +71,7 @@ def kitti_project_depth(src_depth):
     pts = torch.cat((pts, src_depth), dim=-1)
 
     # convert to target view
+    
     pts[:, 0] = pts[:, 0] - 0.54
     right_coords = pts[:, :-1] / pts[:, -1:] * 721.277
     right_coords = right_coords.long()
@@ -86,8 +87,26 @@ def kitti_project_depth(src_depth):
     import cv2
     erode_kernel = np.ones((3, 3), np.uint8)
     projected_depth = cv2.dilate(projected_depth, erode_kernel, iterations=1)
-    # import imageio
-    # imageio.imwrite('projected_depth.png', projected_depth)
+    import imageio
+    imageio.imwrite('projected_depth.png', projected_depth)
+
+def kitti_sample_world_coords(left_image, left_disp):
+    N, C, H, W = left_image.shape
+    left_depth = (0.54 * 721.277) / left_disp
+    left_depth = left_depth.view(-1, 1)
+    # convert camera coords to world coords
+    camera_coords = generate_meshgrid(disp).view(-1, 2)
+    
+    # compute right world coods
+    world_coords_xy = camera_coords / 721.277 * left_depth
+    world_coords_xy[:, 0] = (world_coords_xy[:, 0])
+    world_coords = torch.cat((world_coords_xy, left_depth), dim=-1)
+    right_sample_coords = world_coords[:, :-1] / world_coords[:, -1:] * 721.277
+
+    right_sample_coords = right_sample_coords.view(1, H, W, -1).permute(0, 3, 1, 2)
+    right_image_sampled = normalize_coords(right_sample_coords)
+    warped_img = F.grid_sample(left_image, right_image_sampled, mode='bilinear', padding_mode='border')
+    TensorToPILImage(warped_img[0], saving_path='warped_right.png', img_show=True)
 
 def get_patches(rays_all, patch_size, num_patches, disp):
     '''
@@ -109,7 +128,7 @@ def get_patches(rays_all, patch_size, num_patches, disp):
     disp_mask = disp_mask.reshape(-1)
     
     meshgrid = np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), axis=-1).reshape(-1, 2)
-
+    
     valid_grid = meshgrid[disp_mask]
     
     grid_neighbors = valid_grid[:, None, :] + np.stack(
@@ -189,6 +208,8 @@ if __name__ == '__main__':
         
         # generate projected depth
         # kitti_project_depth(disp_tensor[:, None])
+        kitti_sample_world_coords(left_tensor[None], disp_tensor)
+        # prepare_kitti_dataset(left_tensor,right_tensor, disp_tensor, )
         # generate patches
         # left_tensor = left_tensor.permute(1, 2, 0).unsqueeze(dim=-2)
         # selected_patches, selected_disp = get_patches(left_tensor, 16, 4, disp=disp_tensor)
